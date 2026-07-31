@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>علاقات التحديات - JSON Relation Network</title>
+<link rel="stylesheet" href="relation-network.css">
+</head>
+<body>
+<header>
+  <h1>🔗 شبكة علاقات التحديات</h1>
+  <div class="controls">
+    <label>
+      <input type="file" id="fileInput" accept=".json" style="display:none;">
+      <button type="button" id="loadFileBtn" onclick="document.getElementById('fileInput').click()">📂 تحميل JSON</button>
+    </label>
+    <button class="secondary" id="toggleSidebar" onclick="toggleSidebar()">☰ التحديات</button>
+    <select id="challengeSelect" disabled onchange="loadSelectedChallenge()"></select>
+    <span id="status">لا يوجد ملف</span>
+  </div>
+</header>
+<main>
+  <aside id="sidebar">
+    <div class="sidebar-section">
+      <h3>اللاعبون (Players)</h3>
+      <ul id="playerList" class="sidebar-list"></ul>
+    </div>
+    <div class="sidebar-section">
+      <h3>الفئات في الشبكة (Categories)</h3>
+      <ul id="categoryList" class="sidebar-list"></ul>
+    </div>
+  </aside>
+  <div id="canvasContainer">
+    <canvas id="networkCanvas"></canvas>
+    <div id="tooltip"></div>
+    <div id="legend">
+      <div class="legend-item"><span class="legend-dot player"></span> لاعب</div>
+      <div class="legend-item"><span class="legend-dot category"></span> فئة</div>
+      <div class="legend-item"><span class="legend-dot type-national"></span> وطنية</div>
+      <div class="legend-item"><span class="legend-dot type-club"></span> نادي</div>
+      <div class="legend-item"><span class="legend-dot type-league"></span> دوري</div>
+      <div class="legend-item"><span class="legend-dot type-trophy"></span> بطولة</div>
+      <div class="legend-item"><span class="legend-dot type-achievement"></span> إنجاز</div>
+    </div>
+    <canvas id="miniMap"></canvas>
+  </div>
+</main>
+<script src="relation-network.js"></script>
+</body>
+</html>
