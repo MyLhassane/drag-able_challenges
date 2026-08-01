@@ -14,14 +14,21 @@
       <input type="file" id="fileInput" accept=".json" style="display:none;">
       <button type="button" id="loadFileBtn" onclick="document.getElementById('fileInput').click()">📂 تحميل JSON</button>
     </label>
+    <label>
+      <input type="file" id="posInput" accept=".json" style="display:none;">
+      <button class="secondary" type="button" id="loadPosBtn" onclick="document.getElementById('posInput').click()" title="Load saved positions">📥 Load Pos</button>
+    </label>
     <button class="secondary" id="toggleSidebar" onclick="toggleSidebar()">☰ التحديات</button>
     <select id="challengeSelect" disabled onchange="loadSelectedChallenge()"></select>
+    <button class="secondary" id="snapBtn" onclick="toggleSnap()" title="Snap to grid (G)">🧲 Snap</button>
+    <button id="saveBtn" onclick="savePositions()" title="Save positions (Ctrl/Cmd+S)">💾 Save</button>
+    <button class="secondary" id="clearBtn" onclick="clearSelection()" title="Clear selection (Esc)">✕ Clear</button>
     <span id="status">لا يوجد ملف</span>
   </div>
 </header>
 <main>
   <aside id="sidebar">
-    <div class="sidebar-section">cha
+    <div class="sidebar-section">
       <h3>اللاعبون (Players)</h3>
       <ul id="playerList" class="sidebar-list"></ul>
     </div>
@@ -29,10 +36,15 @@
       <h3>الفئات في الشبكة (Categories)</h3>
       <ul id="categoryList" class="sidebar-list"></ul>
     </div>
+    <div class="sidebar-section">
+      <h3>الحالة (State)</h3>
+      <div id="selectionInfo" class="selection-info">لا يوجد تحديد</div>
+    </div>
   </aside>
   <div id="canvasContainer">
     <canvas id="networkCanvas"></canvas>
     <div id="tooltip"></div>
+    <div id="selectionBox"></div>
     <div id="legend">
       <div class="legend-item"><span class="legend-dot player"></span> لاعب</div>
       <div class="legend-item"><span class="legend-dot category"></span> فئة</div>

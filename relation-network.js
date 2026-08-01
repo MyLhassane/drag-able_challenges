@@ -4,14 +4,21 @@ let edges = [];
 let nodeMap = {};
 let camera = { x: 0, y: 0, scale: 1 };
 let selectedNodeId = null;
+let selectedNodeIds = new Set();
 let hoveredNodeId = null;
 let isDragging = false;
+let isBoxSelecting = false;
 let dragStart = { x: 0, y: 0 };
 let dragNode = null;
+let dragGroup = null;
+let dragGroupOffsets = null;
+let boxStart = { x: 0, y: 0 };
 let imageCache = {};
 let animFrame = null;
 let currentChallenge = null;
 let allChallenges = [];
+let snapEnabled = false;
+const SNAP_SIZE = 20;
 
 const TYPE_COLORS = {
   1: '#f78166', 2: '#d2a8ff', 3: '#58a6ff', 6: '#ffd700', 8: '#7ee787'
@@ -34,6 +41,13 @@ const fileInput = document.getElementById('fileInput');
 const selectEl = document.getElementById('challengeSelect');
 const playerListEl = document.getElementById('playerList');
 const categoryListEl = document.getElementById('categoryList');
+const snapBtn = document.getElementById('snapBtn');
+const selectionInfoEl = document.getElementById('selectionInfo');
+const selectionBoxEl = document.getElementById('selectionBox');
+
+function snap(value) {
+  return snapEnabled ? Math.round(value / SNAP_SIZE) * SNAP_SIZE : value;
+}
 
 function resizeCanvas() {
   const c = document.getElementById('canvasContainer');
@@ -54,6 +68,27 @@ fileInput.addEventListener('change', function(e) {
     try {
       const data = JSON.parse(ev.target.result);
       processData(data);
+    } catch(err) {
+      statusEl.textContent = '\u274c \u062e\u0637\u0623: ' + err.message;
+    }
+  };
+  reader.readAsText(file);
+});
+
+const posInput = document.getElementById('posInput');
+posInput.addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (data && data.positions) {
+        applyPositions(data);
+        statusEl.textContent = '\u062a\u0645 \u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u0645\u0648\u0627\u0636\u0639';
+      } else {
+        statusEl.textContent = '\u274c \u0645\u0644\u0641 \u063a\u064a\u0631 \u0635\u0627\u0644\u062d';
+      }
     } catch(err) {
       statusEl.textContent = '\u274c \u062e\u0637\u0623: ' + err.message;
     }
@@ -122,6 +157,7 @@ function buildGraph(challenge) {
   edges = [];
   nodeMap = {};
   selectedNodeId = null;
+  selectedNodeIds = new Set();
   hoveredNodeId = null;
   imageCache = {};
   currentChallenge = challenge;
@@ -207,6 +243,7 @@ function buildGraph(challenge) {
 
   // Update sidebar
   updateSidebar();
+  updateSelectionInfo();
 
   // Start render loop
   render();
@@ -329,7 +366,7 @@ function drawEdges() {
 function drawNodes() {
   for (var i = 0; i < nodes.length; i++) {
     var n = nodes[i];
-    var isS = (selectedNodeId === n.id);
+    var isS = (selectedNodeId === n.id) || selectedNodeIds.has(n.id);
     var isH = (hoveredNodeId === n.id);
     var r = n.radius;
     if (isS) {
@@ -475,6 +512,14 @@ function screenToWorld(sx, sy) {
   return { x: wx, y: wy };
 }
 
+function worldToScreen(wx, wy) {
+  var cw = canvas.width;
+  var ch = canvas.height;
+  var sx = (wx - camera.x) * camera.scale + cw / 2;
+  var sy = (wy - camera.y) * camera.scale + ch / 2;
+  return { x: sx, y: sy };
+}
+
 function findNodeAt(wx, wy) {
   for (var i = nodes.length - 1; i >= 0; i--) {
     var n = nodes[i];
@@ -491,17 +536,46 @@ canvas.addEventListener('mousedown', function(e) {
   var sy = e.clientY - rect.top;
   var world = screenToWorld(sx, sy);
   var node = findNodeAt(world.x, world.y);
+  var multi = e.shiftKey || e.metaKey || e.ctrlKey;
+
   if (node) {
-    dragNode = node;
-    selectedNodeId = node.id;
+    if (multi) {
+      if (selectedNodeIds.has(node.id)) {
+        selectedNodeIds.delete(node.id);
+      } else {
+        selectedNodeIds.add(node.id);
+      }
+      selectedNodeId = selectedNodeIds.size === 1 ? node.id : null;
+    } else {
+      if (!selectedNodeIds.has(node.id)) {
+        selectedNodeIds = new Set([node.id]);
+      }
+      selectedNodeId = node.id;
+    }
+    if (selectedNodeIds.size > 0) {
+      dragGroup = Array.from(selectedNodeIds);
+      dragGroupOffsets = {};
+      for (var k = 0; k < dragGroup.length; k++) {
+        var nid = dragGroup[k];
+        dragGroupOffsets[nid] = { dx: nodeMap[nid].x - world.x, dy: nodeMap[nid].y - world.y };
+      }
+      dragNode = null;
+    }
     updateSidebar();
     showTooltip(node, e.clientX, e.clientY);
+    updateSelectionInfo();
   } else {
-    isDragging = true;
+    if (!multi) {
+      selectedNodeIds = new Set();
+      selectedNodeId = null;
+    }
+    isBoxSelecting = true;
+    isDragging = false;
+    boxStart = { x: world.x, y: world.y };
     dragStart = { x: e.clientX, y: e.clientY };
-    selectedNodeId = null;
     hideTooltip();
     updateSidebar();
+    updateSelectionInfo();
   }
   render();
 });
@@ -511,9 +585,40 @@ canvas.addEventListener('mousemove', function(e) {
   var sy = e.clientY - rect.top;
   var world = screenToWorld(sx, sy);
 
+  if (isBoxSelecting) {
+    var minX = Math.min(boxStart.x, world.x);
+    var maxX = Math.max(boxStart.x, world.x);
+    var minY = Math.min(boxStart.y, world.y);
+    var maxY = Math.max(boxStart.y, world.y);
+    var sp1 = worldToScreen(minX, minY);
+    var sp2 = worldToScreen(maxX, maxY);
+    selectionBoxEl.style.left = Math.min(sp1.x, sp2.x) + 'px';
+    selectionBoxEl.style.top = Math.min(sp1.y, sp2.y) + 'px';
+    selectionBoxEl.style.width = Math.abs(sp2.x - sp1.x) + 'px';
+    selectionBoxEl.style.height = Math.abs(sp2.y - sp1.y) + 'px';
+    selectionBoxEl.classList.add('visible');
+    render();
+    return;
+  }
+
+  if (dragGroup && dragGroupOffsets) {
+    for (var k = 0; k < dragGroup.length; k++) {
+      var nid = dragGroup[k];
+      var node = nodeMap[nid];
+      if (node) {
+        node.x = snap(world.x + dragGroupOffsets[nid].dx);
+        node.y = snap(world.y + dragGroupOffsets[nid].dy);
+        node.vx = 0;
+        node.vy = 0;
+      }
+    }
+    render();
+    return;
+  }
+
   if (dragNode) {
-    dragNode.x = world.x;
-    dragNode.y = world.y;
+    dragNode.x = snap(world.x);
+    dragNode.y = snap(world.y);
     dragNode.vx = 0;
     dragNode.vy = 0;
     render();
@@ -543,7 +648,38 @@ canvas.addEventListener('mousemove', function(e) {
 });
 
 canvas.addEventListener('mouseup', function(e) {
-  if (dragNode) {
+  if (isBoxSelecting) {
+    isBoxSelecting = false;
+    selectionBoxEl.classList.remove('visible');
+    var rect = canvas.getBoundingClientRect();
+    var sx = e.clientX - rect.left;
+    var sy = e.clientY - rect.top;
+    var world = screenToWorld(sx, sy);
+    var minX = Math.min(boxStart.x, world.x);
+    var maxX = Math.max(boxStart.x, world.x);
+    var minY = Math.min(boxStart.y, world.y);
+    var maxY = Math.max(boxStart.y, world.y);
+    var multi = e.shiftKey || e.metaKey || e.ctrlKey;
+    if (!multi) selectedNodeIds = new Set();
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.x >= minX && n.x <= maxX && n.y >= minY && n.y <= maxY) {
+        selectedNodeIds.add(n.id);
+      }
+    }
+    if (selectedNodeIds.size === 1) {
+      selectedNodeId = Array.from(selectedNodeIds)[0];
+    } else {
+      selectedNodeId = null;
+    }
+    updateSidebar();
+    updateSelectionInfo();
+    render();
+  }
+  if (dragGroup) {
+    dragGroup = null;
+    dragGroupOffsets = null;
+  } else if (dragNode) {
     dragNode = null;
   } else if (isDragging) {
     isDragging = false;
@@ -553,7 +689,12 @@ canvas.addEventListener('mouseup', function(e) {
 
 canvas.addEventListener('mouseleave', function() {
   if (dragNode) dragNode = null;
+  if (dragGroup) { dragGroup = null; dragGroupOffsets = null; }
   if (isDragging) isDragging = false;
+  if (isBoxSelecting) {
+    isBoxSelecting = false;
+    selectionBoxEl.classList.remove('visible');
+  }
   hoveredNodeId = null;
   hideTooltip();
   render();
@@ -716,7 +857,7 @@ function updateSidebar() {
     var p = players[i];
     var li = document.createElement('li');
     li.dataset.nodeId = p.id;
-    if (selectedNodeId === p.id) li.className = 'active';
+    if (selectedNodeId === p.id || selectedNodeIds.has(p.id)) li.className = 'active';
     var thumbSrc = p.image || '';
     var thumbHtml = thumbSrc ? '<img class="thumb" src="' + thumbSrc + '" alt="">' : '<span class="thumb"></span>';
     li.innerHTML = thumbHtml + '<span>' + p.shortLabel + '</span>';
@@ -732,7 +873,7 @@ function updateSidebar() {
     var c = categories[i];
     var li = document.createElement('li');
     li.dataset.nodeId = c.id;
-    if (selectedNodeId === c.id) li.className = 'active';
+    if (selectedNodeId === c.id || selectedNodeIds.has(c.id)) li.className = 'active';
     var typeName = TYPE_NAMES[c.catType] || '';
     var thumbSrc = c.image || '';
     var thumbHtml = thumbSrc ? '<img class="thumb" src="' + thumbSrc + '" alt="">' : '<span class="thumb"></span>';
@@ -749,10 +890,145 @@ function updateSidebar() {
 function focusNode(nodeId) {
   var node = nodeMap[nodeId];
   if (!node) return;
+  if (!event || (!event.shiftKey && !event.metaKey && !event.ctrlKey)) {
+    selectedNodeIds = new Set([nodeId]);
+  } else {
+    selectedNodeIds.add(nodeId);
+  }
   selectedNodeId = nodeId;
   camera.x = node.x;
   camera.y = node.y;
   camera.scale = 1.5;
   updateSidebar();
+  updateSelectionInfo();
   render();
 }
+
+function updateSelectionInfo() {
+  if (!selectionInfoEl) return;
+  var count = selectedNodeIds.size;
+  if (count === 0) {
+    selectionInfoEl.innerHTML = 'لا يوجد تحديد';
+    return;
+  }
+  var players = 0;
+  var categories = 0;
+  selectedNodeIds.forEach(function(id) {
+    var n = nodeMap[id];
+    if (!n) return;
+    if (n.type === 'player') players++;
+    else categories++;
+  });
+  selectionInfoEl.innerHTML =
+    '<b>' + count + '</b> محدد<br>' +
+    'لاعبون: <b>' + players + '</b> | فئات: <b>' + categories + '</b><br>' +
+    'شبكة: ' + (snapEnabled ? '<b>ON (' + SNAP_SIZE + 'px)</b>' : 'OFF');
+}
+
+function clearSelection() {
+  selectedNodeIds = new Set();
+  selectedNodeId = null;
+  updateSidebar();
+  updateSelectionInfo();
+  render();
+}
+
+function toggleSnap() {
+  snapEnabled = !snapEnabled;
+  snapBtn.classList.toggle('active', snapEnabled);
+  if (snapEnabled) {
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].x = snap(nodes[i].x);
+      nodes[i].y = snap(nodes[i].y);
+    }
+  }
+  updateSelectionInfo();
+  render();
+  statusEl.textContent = snapEnabled ? 'Snap ON (' + SNAP_SIZE + 'px)' : 'Snap OFF';
+}
+
+function snapAll() {
+  for (var i = 0; i < nodes.length; i++) {
+    nodes[i].x = Math.round(nodes[i].x / SNAP_SIZE) * SNAP_SIZE;
+    nodes[i].y = Math.round(nodes[i].y / SNAP_SIZE) * SNAP_SIZE;
+  }
+  render();
+}
+
+function savePositions() {
+  if (!currentChallenge) {
+    statusEl.textContent = 'لا يوجد تحدي للتحميل';
+    return;
+  }
+  var positions = { players: {}, categories: {} };
+  for (var i = 0; i < nodes.length; i++) {
+    var n = nodes[i];
+    var entry = { x: Math.round(n.x), y: Math.round(n.y) };
+    if (n.type === 'player') {
+      var pid = n.playerData && n.playerData.id;
+      if (pid != null) positions.players[pid] = entry;
+    } else if (n.catId != null) {
+      positions.categories[n.catId] = entry;
+    }
+  }
+  var idx = parseInt(selectEl.value);
+  var entry2 = allChallenges[idx];
+  var src = entry2 ? entry2.source : 'challenges';
+  var key = entry2 ? entry2.key : '0';
+  var out = {
+    source: src,
+    key: key,
+    savedAt: new Date().toISOString(),
+    snap: snapEnabled ? SNAP_SIZE : 0,
+    count: nodes.length,
+    positions: positions
+  };
+  var blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  var fname = 'positions-' + src.replace(/\//g, '-') + '-' + key + '.json';
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  statusEl.textContent = 'تم الحفظ: ' + fname;
+}
+
+function applyPositions(positionsData) {
+  if (!positionsData || !positionsData.positions) return;
+  var pos = positionsData.positions;
+  for (var i = 0; i < nodes.length; i++) {
+    var n = nodes[i];
+    if (n.type === 'player') {
+      var pid = n.playerData && n.playerData.id;
+      var p = pos.players && pos.players[pid];
+      if (p) { n.x = p.x; n.y = p.y; }
+    } else if (n.catId != null) {
+      var cp = pos.categories && pos.categories[n.catId];
+      if (cp) { n.x = cp.x; n.y = cp.y; }
+    }
+  }
+  render();
+}
+
+window.addEventListener('keydown', function(e) {
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
+  if (e.key === 'Escape') {
+    clearSelection();
+  } else if (e.key === 'g' || e.key === 'G') {
+    toggleSnap();
+  } else if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
+    e.preventDefault();
+    selectedNodeIds = new Set();
+    for (var i = 0; i < nodes.length; i++) selectedNodeIds.add(nodes[i].id);
+    selectedNodeId = null;
+    updateSidebar();
+    updateSelectionInfo();
+    render();
+  } else if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    savePositions();
+  }
+});
